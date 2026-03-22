@@ -17,10 +17,24 @@
   <h1>Bäume in Wien</h1>
   <div id="controls">
     <div id="filters">
-      <select id="group-filter">
-        <option value="">Alle Baumarten</option>
-        <option value="Andere">● Andere Baumarten</option>
-      </select>
+
+      <!-- Custom dropdown -->
+      <div id="group-dropdown" class="custom-select">
+        <div id="group-selected" class="custom-select-selected">
+          <span class="dot" style="background:#9ca3af"></span>
+          <span class="label">Alle Baumarten</span>
+        </div>
+        <div id="group-options" class="custom-select-options hidden">
+          <div class="custom-option" data-value="" data-color="#9ca3af">
+            <span class="dot" style="background:#9ca3af"></span>Alle Baumarten
+          </div>
+          <!-- groups injected here -->
+          <div class="custom-option" data-value="Andere" data-color="#d1d5db">
+            <span class="dot" style="background:#d1d5db"></span>Andere Baumarten
+          </div>
+        </div>
+      </div>
+
       <div id="year-inputs">
         <input type="number" id="year-from" placeholder="Jahr von" min="1800" max="2030" />
         <input type="number" id="year-to" placeholder="Jahr bis" min="1800" max="2030" />
@@ -57,12 +71,60 @@ const GROUP_COLORS = {
 };
 const DEFAULT_COLOR = "#d1d5db";
 
-function groupColor(group) {
-  return (group && GROUP_COLORS[group]) || DEFAULT_COLOR;
+function groupColor(g) {
+  return (g && GROUP_COLORS[g]) || DEFAULT_COLOR;
 }
 
 function isMobile() {
   return window.innerWidth < MOBILE_BREAKPOINT;
+}
+
+// ── Custom dropdown ───────────────────────────────────────────────────
+let selectedGroup = "";
+
+const dropdownEl   = document.getElementById("group-dropdown");
+const selectedEl   = document.getElementById("group-selected");
+const optionsEl    = document.getElementById("group-options");
+
+function setSelectedGroup(value, label, color) {
+  selectedGroup = value;
+  selectedEl.querySelector(".dot").style.background = color;
+  selectedEl.querySelector(".label").textContent = label;
+  optionsEl.classList.add("hidden");
+  fetchTrees();
+}
+
+selectedEl.addEventListener("click", e => {
+  e.stopPropagation();
+  optionsEl.classList.toggle("hidden");
+});
+
+document.addEventListener("click", () => optionsEl.classList.add("hidden"));
+optionsEl.addEventListener("click", e => e.stopPropagation());
+
+optionsEl.addEventListener("click", e => {
+  const opt = e.target.closest(".custom-option");
+  if (!opt) return;
+  setSelectedGroup(
+    opt.dataset.value,
+    opt.querySelector(".dot").nextSibling.textContent.trim(),
+    opt.dataset.color
+  );
+});
+
+async function loadGroups() {
+  const res  = await fetch(`${API}/groups`);
+  const data = await res.json();
+  const andereOpt = optionsEl.querySelector('[data-value="Andere"]');
+  data.groups.forEach(g => {
+    const color = GROUP_COLORS[g] || DEFAULT_COLOR;
+    const div = document.createElement("div");
+    div.className = "custom-option";
+    div.dataset.value = g;
+    div.dataset.color = color;
+    div.innerHTML = `<span class="dot" style="background:${color}"></span>${g}`;
+    optionsEl.insertBefore(div, andereOpt);
+  });
 }
 
 // ── Map ───────────────────────────────────────────────────────────────
@@ -77,7 +139,6 @@ const map = new maplibregl.Map({
 map.addControl(new maplibregl.NavigationControl(), "top-right");
 
 const statusEl  = document.getElementById("status");
-const groupSel  = document.getElementById("group-filter");
 const yearFrom  = document.getElementById("year-from");
 const yearTo    = document.getElementById("year-to");
 const popupCard = document.getElementById("popup-card");
@@ -87,24 +148,81 @@ let fetchTimer     = null;
 let watchId        = null;
 let locationMarker = null;
 let locating       = false;
+let mapReady       = false;
 
-// ── Load groups into dropdown ─────────────────────────────────────────
-async function loadGroups() {
-  const res  = await fetch(`${API}/groups`);
-  const data = await res.json();
-  const andereOpt = groupSel.querySelector('option[value="Andere"]');
-  data.groups.forEach(g => {
-    const opt = document.createElement("option");
-    opt.value = g;
-    opt.textContent = `● ${g}`;
-    // style the ● via a data attribute; actual color set below
-    opt.dataset.color = GROUP_COLORS[g] || DEFAULT_COLOR;
-    groupSel.insertBefore(opt, andereOpt);
+// ── Tree marker sprite (dot + stem) ───────────────────────────────────
+// Draws a filled circle with a brown rectangle stem below it on a canvas
+// and registers it as a MapLibre image.
+function makeTreeSprite(color, size) {
+  // size = total canvas height; dot occupies top portion, stem below
+  const w       = size;
+  const h       = size * 1.6;          // extra height for stem
+  const r       = size / 2;            // dot radius
+  const stemW   = Math.max(2, size * 0.22);
+  const stemH   = size * 0.7;
+
+  const canvas  = document.createElement("canvas");
+  canvas.width  = w;
+  canvas.height = h;
+  const ctx     = canvas.getContext("2d");
+
+  // Stem (brown, centered, below dot)
+  ctx.fillStyle = "#92400e";
+  ctx.globalAlpha = 0.7;
+  ctx.beginPath();
+  ctx.roundRect(w / 2 - stemW / 2, r * 2 - 1, stemW, stemH, 1);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Dot border/shadow
+  ctx.beginPath();
+  ctx.arc(w / 2, r, r - 1, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  ctx.fill();
+
+  // Dot fill
+  ctx.beginPath();
+  ctx.arc(w / 2, r - 1, r - 2, 0, Math.PI * 2);
+  ctx.fillStyle = color;
+  ctx.fill();
+
+  return {
+    data:   new Uint8Array(ctx.getImageData(0, 0, w, h).data.buffer),
+    width:  w,
+    height: h,
+  };
+}
+
+function registerSprites() {
+  // Register one sprite per group + default
+  const allColors = { ...GROUP_COLORS, "__default": DEFAULT_COLOR };
+  Object.entries(allColors).forEach(([key, color]) => {
+    const id = `tree-${key.toLowerCase().replace(/\s/g, "_")}`;
+    const sprite = makeTreeSprite(color, 14);
+    if (!map.hasImage(id)) map.addImage(id, sprite, { pixelRatio: 2 });
   });
 }
 
-// ── Fetch trees ───────────────────────────────────────────────────────
+// Returns a MapLibre match expression that picks the right sprite image
+function spriteExpression() {
+  const expr = ["match", ["get", "group"]];
+  Object.keys(GROUP_COLORS).forEach(g => {
+    expr.push(g, `tree-${g.toLowerCase()}`);
+  });
+  expr.push("tree-__default");
+  return expr;
+}
+
+function colorExpression() {
+  const expr = ["match", ["get", "group"]];
+  Object.entries(GROUP_COLORS).forEach(([g, c]) => expr.push(g, c));
+  expr.push(DEFAULT_COLOR);
+  return expr;
+}
+
+// ── Fetch ─────────────────────────────────────────────────────────────
 async function fetchTrees() {
+  if (!mapReady) return;
   const bounds = map.getBounds();
   const params = new URLSearchParams({
     minlat: bounds.getSouth().toFixed(6),
@@ -112,9 +230,9 @@ async function fetchTrees() {
     maxlat: bounds.getNorth().toFixed(6),
     maxlon: bounds.getEast().toFixed(6),
   });
-  if (groupSel.value)  params.set("group", groupSel.value);
-  if (yearFrom.value)  params.set("year_from", yearFrom.value);
-  if (yearTo.value)    params.set("year_to", yearTo.value);
+  if (selectedGroup)  params.set("group", selectedGroup);
+  if (yearFrom.value) params.set("year_from", yearFrom.value);
+  if (yearTo.value)   params.set("year_to", yearTo.value);
 
   setStatus("Lade…");
   try {
@@ -126,13 +244,11 @@ async function fetchTrees() {
       clearTrees();
       return;
     }
-
     if (data.count >= 2000) {
       setStatus("Vergrößern, um Bäume zu sehen.");
       clearTrees();
       return;
     }
-
     renderTrees(data.trees);
     setStatus(`${data.count} Bäume`);
   } catch {
@@ -152,13 +268,6 @@ function clearTrees() {
 }
 
 // ── Render ────────────────────────────────────────────────────────────
-function colorExpression() {
-  const expr = ["match", ["get", "group"]];
-  Object.entries(GROUP_COLORS).forEach(([g, c]) => expr.push(g, c));
-  expr.push(DEFAULT_COLOR);
-  return expr;
-}
-
 function renderTrees(trees) {
   const geojson = {
     type: "FeatureCollection",
@@ -176,49 +285,43 @@ function renderTrees(trees) {
 
   map.addSource("trees", { type: "geojson", data: geojson });
 
-  // Stem — narrow brown bar below the dot
+  // Symbol layer: custom sprite (dot+stem) — shown at zoom 14+
   map.addLayer({
-    id: "trees-stems",
-    type: "circle",
+    id: "trees-symbols",
+    type: "symbol",
     source: "trees",
     minzoom: 14,
-    paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 14, 1.5, 18, 2.5],
-      "circle-color": "#92400e",
-      "circle-translate": ["interpolate", ["linear"], ["zoom"],
-        14, ["literal", [0, 10]],
-        18, ["literal", [0, 16]]
-      ],
-      "circle-opacity": 0.65,
+    layout: {
+      "icon-image": spriteExpression(),
+      "icon-size": ["interpolate", ["linear"], ["zoom"], 14, 0.8, 18, 1.6],
+      "icon-allow-overlap": true,
+      "icon-anchor": "bottom",   // anchor at bottom of sprite = stem base
     },
   });
 
-  // Main dot
+  // Fallback circles for zoom < 14 (no stem at this scale, just dots)
   map.addLayer({
     id: "trees-circles",
     type: "circle",
     source: "trees",
-    minzoom: 14,
+    maxzoom: 14,
     paint: {
-      "circle-radius": ["interpolate", ["linear"], ["zoom"], 14, 4, 18, 9],
+      "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, 2, 13, 4],
       "circle-color": colorExpression(),
-      "circle-stroke-width": 1.5,
-      "circle-stroke-color": "rgba(0,0,0,0.18)",
+      "circle-stroke-width": 1,
+      "circle-stroke-color": "rgba(0,0,0,0.15)",
     },
   });
 
-  // Click handlers
-  map.on("click", "trees-circles", e => {
-    e.preventDefault();
-    showPopup(e.features[0], e.point);
-  });
-
+  map.on("click", "trees-symbols", e => { e.preventDefault(); showPopup(e.features[0], e.point); });
+  map.on("click", "trees-circles", e => { e.preventDefault(); showPopup(e.features[0], e.point); });
+  map.on("mouseenter", "trees-symbols", () => map.getCanvas().style.cursor = "pointer");
+  map.on("mouseleave", "trees-symbols", () => map.getCanvas().style.cursor = "");
   map.on("mouseenter", "trees-circles", () => map.getCanvas().style.cursor = "pointer");
   map.on("mouseleave", "trees-circles", () => map.getCanvas().style.cursor = "");
 
-  // Close on background click
   map.on("click", e => {
-    const hits = map.queryRenderedFeatures(e.point, { layers: ["trees-circles"] });
+    const hits = map.queryRenderedFeatures(e.point, { layers: ["trees-symbols", "trees-circles"] });
     if (!hits.length) closePopup();
   });
 }
@@ -226,7 +329,6 @@ function renderTrees(trees) {
 // ── Popup ─────────────────────────────────────────────────────────────
 function showPopup(feature, point) {
   const p = feature.properties;
-
   document.getElementById("popup-species").textContent = p.species || "Unbekannte Art";
 
   const fields = [
@@ -250,25 +352,26 @@ function showPopup(feature, point) {
   popupCard.classList.remove("hidden");
 
   if (isMobile()) {
-    // Reset to bottom-center via CSS
-    popupCard.style.left      = "";
-    popupCard.style.top       = "";
-    popupCard.style.transform = "";
-
-    // Center map on tree in the visible portion above the popup
+    // Let CSS handle bottom positioning, then pan map so tree is
+    // centered in the visible area above the popup.
     requestAnimationFrame(() => {
+      const mapWrapEl = document.getElementById("map-wrap");
       const popupH    = popupCard.offsetHeight;
-      const mapWrapH  = document.getElementById("map-wrap").offsetHeight;
-      const visibleH  = mapWrapH - popupH - 72; // 72 = bottom offset
+      const popupBot  = 72; // matches CSS bottom value in px
+      const usedH     = popupH + popupBot;
+      const visibleH  = mapWrapEl.offsetHeight - usedH;
+
       const coords    = feature.geometry.coordinates;
       const treePx    = map.project(coords);
-      // Desired screen position: center of visible area
-      const targetY   = visibleH / 2;
-      const offsetY   = treePx.y - targetY;
-      const center    = map.unproject([treePx.x, treePx.y - (targetY - treePx.y)]);
-      // Simpler: pan by the pixel offset
+
+      // We want the tree to appear at visibleH/2 from top of map
+      const currentCenterPx = map.project(map.getCenter());
+      const mapH            = mapWrapEl.offsetHeight;
+      // The visible center in map px coords:
+      const targetY = treePx.y - (visibleH / 2 - mapH / 2);
+
       map.easeTo({
-        center: map.unproject({ x: treePx.x, y: treePx.y - (visibleH / 2 - (mapWrapH / 2 - popupH / 2 - 36)) }),
+        center: map.unproject([currentCenterPx.x, targetY]),
         duration: 350,
       });
     });
@@ -278,28 +381,23 @@ function showPopup(feature, point) {
 }
 
 function positionPopupNearPoint(point) {
-  // Temporarily place offscreen to measure
   popupCard.style.left      = "-9999px";
   popupCard.style.top       = "-9999px";
-  popupCard.style.transform = "";
+  popupCard.style.transform = "none";
 
-  const mapWrap  = document.getElementById("map-wrap");
-  const wrapW    = mapWrap.offsetWidth;
-  const wrapH    = mapWrap.offsetHeight;
-  const cardW    = popupCard.offsetWidth;
-  const cardH    = popupCard.offsetHeight;
-  const gap      = 14;
-  const margin   = 12;
-  const dotR     = 10;
+  const mapWrap = document.getElementById("map-wrap");
+  const wrapW   = mapWrap.offsetWidth;
+  const wrapH   = mapWrap.offsetHeight;
+  const cardW   = popupCard.offsetWidth;
+  const cardH   = popupCard.offsetHeight;
+  const gap     = 14;
+  const margin  = 12;
+  const dotR    = 12;
 
-  // Vertical: prefer below, flip above if needed
   let top = point.y + dotR + gap;
-  if (top + cardH > wrapH - margin) {
-    top = point.y - dotR - gap - cardH;
-  }
+  if (top + cardH > wrapH - margin) top = point.y - dotR - gap - cardH;
   top = Math.max(margin, top);
 
-  // Horizontal: centered on dot, clamped
   let left = point.x - cardW / 2;
   left = Math.max(margin, Math.min(left, wrapW - cardW - margin));
 
@@ -313,14 +411,8 @@ function closePopup() {
 
 // ── Live location ─────────────────────────────────────────────────────
 function startLocating() {
-  if (!navigator.geolocation) {
-    alert("Geolokalisierung wird nicht unterstützt.");
-    return;
-  }
-  if (locating) {
-    stopLocating();
-    return;
-  }
+  if (!navigator.geolocation) { alert("Geolokalisierung wird nicht unterstützt."); return; }
+  if (locating) { stopLocating(); return; }
 
   locating = true;
   locateBtn.classList.add("active");
@@ -338,43 +430,30 @@ function startLocating() {
         firstFix = false;
       }
 
-      // Blue dot
       if (!locationMarker) {
         const el = document.createElement("div");
         el.className = "location-dot";
         locationMarker = new maplibregl.Marker({ element: el, anchor: "center" })
-          .setLngLat(lngLat)
-          .addTo(map);
+          .setLngLat(lngLat).addTo(map);
       } else {
         locationMarker.setLngLat(lngLat);
       }
 
-      // Accuracy circle
       const circle = makeAccuracyCircle(longitude, latitude, accuracy);
       if (map.getSource("accuracy")) {
         map.getSource("accuracy").setData(circle);
       } else {
         map.addSource("accuracy", { type: "geojson", data: circle });
-        map.addLayer({
-          id: "accuracy-fill",
-          type: "fill",
-          source: "accuracy",
-          paint: { "fill-color": "#3b82f6", "fill-opacity": 0.1 },
-        }, "trees-stems");
-        map.addLayer({
-          id: "accuracy-border",
-          type: "line",
-          source: "accuracy",
-          paint: { "line-color": "#3b82f6", "line-width": 1, "line-opacity": 0.35 },
-        }, "trees-stems");
+        // Insert below trees if layers exist, otherwise just add on top
+        const below = map.getLayer("trees-circles") ? "trees-circles" : undefined;
+        map.addLayer({ id: "accuracy-fill", type: "fill", source: "accuracy",
+          paint: { "fill-color": "#3b82f6", "fill-opacity": 0.1 } }, below);
+        map.addLayer({ id: "accuracy-border", type: "line", source: "accuracy",
+          paint: { "line-color": "#3b82f6", "line-width": 1, "line-opacity": 0.35 } }, below);
       }
-
       setStatus("");
     },
-    () => {
-      setStatus("Standort konnte nicht ermittelt werden.");
-      stopLocating();
-    },
+    () => { setStatus("Standort konnte nicht ermittelt werden."); stopLocating(); },
     { enableHighAccuracy: true, maximumAge: 5000 }
   );
 }
@@ -382,14 +461,8 @@ function startLocating() {
 function stopLocating() {
   locating = false;
   locateBtn.classList.remove("active");
-  if (watchId !== null) {
-    navigator.geolocation.clearWatch(watchId);
-    watchId = null;
-  }
-  if (locationMarker) {
-    locationMarker.remove();
-    locationMarker = null;
-  }
+  if (watchId !== null) { navigator.geolocation.clearWatch(watchId); watchId = null; }
+  if (locationMarker)   { locationMarker.remove(); locationMarker = null; }
   if (map.getSource("accuracy")) {
     map.removeLayer("accuracy-fill");
     map.removeLayer("accuracy-border");
@@ -397,15 +470,13 @@ function stopLocating() {
   }
 }
 
-function makeAccuracyCircle(lng, lat, radiusMeters) {
-  const points = 64;
-  const coords = [];
-  const R = 6371000;
-  for (let i = 0; i <= points; i++) {
-    const angle = (i / points) * 2 * Math.PI;
-    const dLat  = (radiusMeters / R) * (180 / Math.PI);
-    const dLng  = dLat / Math.cos(lat * Math.PI / 180);
-    coords.push([lng + dLng * Math.sin(angle), lat + dLat * Math.cos(angle)]);
+function makeAccuracyCircle(lng, lat, r) {
+  const pts = 64, R = 6371000, coords = [];
+  for (let i = 0; i <= pts; i++) {
+    const a = (i / pts) * 2 * Math.PI;
+    const dLat = (r / R) * (180 / Math.PI);
+    const dLng = dLat / Math.cos(lat * Math.PI / 180);
+    coords.push([lng + dLng * Math.sin(a), lat + dLat * Math.cos(a)]);
   }
   return { type: "Feature", geometry: { type: "Polygon", coordinates: [coords] } };
 }
@@ -416,15 +487,18 @@ function scheduleFetch() {
   fetchTimer = setTimeout(fetchTrees, 400);
 }
 
+locateBtn.addEventListener("click", startLocating);
+yearFrom.addEventListener("change", fetchTrees);
+yearTo.addEventListener("change", fetchTrees);
+
 map.on("load", () => {
+  mapReady = true;
+  registerSprites();
   loadGroups();
   fetchTrees();
 });
 
 map.on("moveend", scheduleFetch);
-groupSel.addEventListener("change", fetchTrees);
-yearFrom.addEventListener("change", fetchTrees);
-yearTo.addEventListener("change", fetchTrees);
 </script>
 </body>
 </html>
