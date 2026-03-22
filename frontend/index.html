@@ -143,7 +143,7 @@ let locating       = false;
 function makeTreeSprite(color, dotR) {
   const w      = dotR * 2;
   const stemW  = Math.max(2, dotR * 0.35);
-  const stemH  = dotR * 0.93;
+  const stemH  = dotR * 1.4;
   const h      = dotR * 2 + stemH;
 
   const canvas  = document.createElement("canvas");
@@ -157,9 +157,15 @@ function makeTreeSprite(color, dotR) {
   ctx.fillRect(w / 2 - stemW / 2, dotR * 2 - 2, stemW, stemH);
   ctx.globalAlpha = 1;
 
-  // Dot fill only — no shadow ring, slightly larger radius
+  // Dot shadow ring
   ctx.beginPath();
-  ctx.arc(w / 2, dotR - 1, dotR * 1.12, 0, Math.PI * 2);
+  ctx.arc(w / 2, dotR, dotR, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0,0.15)";
+  ctx.fill();
+
+  // Dot fill
+  ctx.beginPath();
+  ctx.arc(w / 2, dotR - 1, dotR - 1.5, 0, Math.PI * 2);
   ctx.fillStyle = color;
   ctx.fill();
 
