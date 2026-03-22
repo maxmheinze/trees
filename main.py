@@ -1,9 +1,6 @@
 #!/usr/bin/env python3
 """
 main.py — FastAPI backend for the Wien Baumkataster map.
-Exposes two endpoints:
-  GET /api/trees?minlat=&minlon=&maxlat=&maxlon=[&species=][&year_from=][&year_to=]
-  GET /api/species
 """
 
 import sqlite3
@@ -13,9 +10,31 @@ from fastapi.middleware.cors import CORSMiddleware
 
 DB_PATH = Path("/home/trees/data/trees.db")
 
+# Group mapping: substring (lowercase) -> group label
+SPECIES_GROUPS = {
+    "ahorn":    "Ahorn",
+    "linde":    "Linde",
+    "eiche":    "Eiche",
+    "platan":   "Platane",
+    "kastanie": "Kastanie",
+    "kirsche":  "Kirsche",
+    "esche":    "Esche",
+    "birke":    "Birke",
+    "pappel":   "Pappel",
+    "pflaume":  "Pflaume",
+}
+
+def get_group(species: str) -> str | None:
+    if not species:
+        return None
+    s = species.lower()
+    for key, label in SPECIES_GROUPS.items():
+        if key in s:
+            return label
+    return None
+
 app = FastAPI()
 
-# CORS: only allow requests from our own frontend domain
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://trees.maxheinze.eu"],
@@ -35,13 +54,12 @@ def get_trees(
     minlon: float = Query(...),
     maxlat: float = Query(...),
     maxlon: float = Query(...),
-    species: str = Query(None),
+    group: str = Query(None),
     year_from: int = Query(None),
     year_to: int = Query(None),
 ):
-    # Clamp bounding box to a reasonable size to prevent abuse
-    if (maxlat - minlat) > 0.1 or (maxlon - minlon) > 0.1:
-        return {"error": "Bounding box too large"}, 400
+    if (maxlat - minlat) > 0.09 or (maxlon - minlon) > 0.13:
+        return {"error": "zoom"}
 
     query = """
         SELECT baum_id, lat, lon, species, year_planted,
@@ -55,9 +73,12 @@ def get_trees(
         "minlon": minlon, "maxlon": maxlon,
     }
 
-    if species:
-        query += " AND species = :species"
-        params["species"] = species
+    if group:
+        # Map group label back to substring for SQL LIKE
+        key = next((k for k, v in SPECIES_GROUPS.items() if v == group), None)
+        if key:
+            query += " AND LOWER(species) LIKE :species_pattern"
+            params["species_pattern"] = f"%{key}%"
 
     if year_from is not None:
         query += " AND year_planted >= :year_from"
@@ -72,16 +93,15 @@ def get_trees(
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
 
-    return {
-        "count": len(rows),
-        "trees": [dict(row) for row in rows],
-    }
+    trees = []
+    for row in rows:
+        d = dict(row)
+        d["group"] = get_group(d.get("species"))
+        trees.append(d)
+
+    return {"count": len(trees), "trees": trees}
 
 
-@app.get("/api/species")
-def get_species():
-    with get_db() as conn:
-        rows = conn.execute(
-            "SELECT DISTINCT species FROM trees WHERE species IS NOT NULL ORDER BY species"
-        ).fetchall()
-    return {"species": [row["species"] for row in rows]}
+@app.get("/api/groups")
+def get_groups():
+    return {"groups": list(SPECIES_GROUPS.values())}
