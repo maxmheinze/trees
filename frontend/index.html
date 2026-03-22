@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Wiener Baumkataster</title>
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<header>
+  <h1>🌳 Wiener Baumkataster</h1>
+  <button id="locate-btn">📍 Mein Standort</button>
+</header>
+
+<div id="filters">
+  <select id="species-filter">
+    <option value="">Alle Baumarten</option>
+  </select>
+  <input type="number" id="year-from" placeholder="Jahr von" min="1800" max="2030" />
+  <input type="number" id="year-to" placeholder="Jahr bis" min="1800" max="2030" />
+</div>
+
+<div id="map"></div>
+<div id="status">Karte laden…</div>
+
+<script>
+  const API = "https://trees.maxheinze.eu/api";
+
+  // Vienna center
+  const map = new maplibregl.Map({
+    container: "map",
+    style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+    center: [16.3738, 48.2082],
+    zoom: 13,
+  });
+
+  map.addControl(new maplibregl.NavigationControl(), "top-right");
+
+  const status = document.getElementById("status");
+  const speciesFilter = document.getElementById("species-filter");
+  const yearFrom = document.getElementById("year-from");
+  const yearTo = document.getElementById("year-to");
+
+  let userMarker = null;
+  let fetchTimer = null;
+
+  // Load species list into dropdown
+  async function loadSpecies() {
+    const res = await fetch(`${API}/species`);
+    const data = await res.json();
+    data.species.forEach(s => {
+      const opt = document.createElement("option");
+      opt.value = s;
+      opt.textContent = s;
+      speciesFilter.appendChild(opt);
+    });
+  }
+
+  // Fetch trees for current viewport
+  async function fetchTrees() {
+    const bounds = map.getBounds();
+    const params = new URLSearchParams({
+      minlat: bounds.getSouth().toFixed(6),
+      minlon: bounds.getWest().toFixed(6),
+      maxlat: bounds.getNorth().toFixed(6),
+      maxlon: bounds.getEast().toFixed(6),
+    });
+    if (speciesFilter.value) params.set("species", speciesFilter.value);
+    if (yearFrom.value) params.set("year_from", yearFrom.value);
+    if (yearTo.value) params.set("year_to", yearTo.value);
+
+    status.textContent = "Lade Bäume…";
+    try {
+      const res = await fetch(`${API}/trees?${params}`);
+      const data = await res.json();
+
+      if (data.error) {
+        status.textContent = "Zu weit herausgezoomt — bitte näher heranzoomen.";
+        clearTrees();
+        return;
+      }
+
+      renderTrees(data.trees);
+      status.textContent = `${data.count} Bäume angezeigt`;
+    } catch (e) {
+      status.textContent = "Fehler beim Laden.";
+    }
+  }
+
+  function clearTrees() {
+    if (map.getSource("trees")) {
+      map.getSource("trees").setData({ type: "FeatureCollection", features: [] });
+    }
+  }
+
+  function renderTrees(trees) {
+    const geojson = {
+      type: "FeatureCollection",
+      features: trees.map(t => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [t.lon, t.lat] },
+        properties: t,
+      })),
+    };
+
+    if (map.getSource("trees")) {
+      map.getSource("trees").setData(geojson);
+    } else {
+      map.addSource("trees", { type: "geojson", data: geojson });
+      map.addLayer({
+        id: "trees-layer",
+        type: "circle",
+        source: "trees",
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 3, 16, 7],
+          "circle-color": "#4ade80",
+          "circle-opacity": 0.75,
+          "circle-stroke-width": 1,
+          "circle-stroke-color": "#166534",
+        },
+      });
+
+      // Popup on click
+      map.on("click", "trees-layer", e => {
+        const p = e.features[0].properties;
+        new maplibregl.Popup({ maxWidth: "260px" })
+          .setLngLat(e.features[0].geometry.coordinates)
+          .setHTML(`
+            <div id="popup-content">
+              <strong>${p.species || "Unbekannt"}</strong><br>
+              📍 ${p.street || "—"}, Bezirk ${p.district || "—"}<br>
+              📅 Gepflanzt: ${p.year_planted || "—"}<br>
+              📏 Höhe: ${p.height_class || "—"}<br>
+              🌿 Kronendurchmesser: ${p.crown_diameter || "—"}<br>
+              🪵 Stammumfang: ${p.trunk_circumference ? p.trunk_circumference + " cm" : "—"}
+            </div>`)
+          .addTo(map);
+      });
+
+      map.on("mouseenter", "trees-layer", () => map.getCanvas().style.cursor = "pointer");
+      map.on("mouseleave", "trees-layer", () => map.getCanvas().style.cursor = "");
+    }
+  }
+
+  // Debounce fetches so we don't hammer the API while panning
+  function scheduleFetch() {
+    clearTimeout(fetchTimer);
+    fetchTimer = setTimeout(fetchTrees, 400);
+  }
+
+  map.on("load", () => {
+    loadSpecies();
+    fetchTrees();
+  });
+
+  map.on("moveend", scheduleFetch);
+  speciesFilter.addEventListener("change", fetchTrees);
+  yearFrom.addEventListener("change", fetchTrees);
+  yearTo.addEventListener("change", fetchTrees);
+
+  // Geolocation
+  document.getElementById("locate-btn").addEventListener("click", () => {
+    if (!navigator.geolocation) {
+      alert("Geolokalisierung wird nicht unterstützt.");
+      return;
+    }
+    status.textContent = "Standort wird ermittelt…";
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const { longitude, latitude } = pos.coords;
+        map.flyTo({ center: [longitude, latitude], zoom: 15 });
+        if (userMarker) userMarker.remove();
+        userMarker = new maplibregl.Marker({ color: "#f59e0b" })
+          .setLngLat([longitude, latitude])
+          .addTo(map);
+      },
+      err => { status.textContent = "Standort konnte nicht ermittelt werden."; }
+    );
+  });
+</script>
+</body>
+</html>
