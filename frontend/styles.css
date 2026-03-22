@@ -15,52 +15,36 @@ body {
   flex-direction: column;
 }
 
-/* ── Header ─────────────────────────────────────────────────────────── */
+/* ── Header ──────────────────────────────────────────────────────────── */
 header {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 16px;
   background: #ffffff;
   border-bottom: 1px solid #e5e7eb;
-  position: relative;
+  padding: 12px 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 header h1 {
-  font-size: 1rem;
+  font-size: 1.25rem;
   font-weight: 700;
   color: #111827;
   text-align: center;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
 
-#locate-btn {
-  position: absolute;
-  right: 16px;
-  background: #111827;
-  color: #ffffff;
-  border: none;
-  border-radius: 8px;
-  padding: 7px 12px;
-  font-family: 'Inter', sans-serif;
-  font-size: 0.8rem;
-  font-weight: 600;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-#locate-btn:active {
-  opacity: 0.8;
-}
-
-/* ── Filters ─────────────────────────────────────────────────────────── */
-#filters {
+#controls {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 16px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+}
+
+#filters {
+  display: flex;
+  flex: 1;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 #filters select,
@@ -77,6 +61,7 @@ header h1 {
 
 #filters select {
   flex: 2;
+  min-width: 130px;
 }
 
 #year-inputs {
@@ -86,13 +71,37 @@ header h1 {
 }
 
 #year-inputs input {
-  width: 90px;
   flex: 1;
+  min-width: 70px;
 }
 
 #filters select:focus,
 #filters input:focus {
   border-color: #6b7280;
+}
+
+/* ── Locate button ───────────────────────────────────────────────────── */
+#locate-btn {
+  background: #111827;
+  color: #ffffff;
+  border: none;
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-family: 'Inter', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+#locate-btn:active {
+  opacity: 0.8;
+}
+
+#locate-btn.active {
+  background: #3b82f6;
 }
 
 /* ── Map wrapper ─────────────────────────────────────────────────────── */
@@ -113,7 +122,7 @@ header h1 {
   bottom: 24px;
   left: 50%;
   transform: translateX(-50%);
-  background: rgba(255,255,255,0.92);
+  background: rgba(255,255,255,0.93);
   color: #374151;
   border: 1px solid #e5e7eb;
   padding: 5px 14px;
@@ -132,15 +141,13 @@ header h1 {
 /* ── Popup card ──────────────────────────────────────────────────────── */
 #popup-card {
   position: absolute;
-  bottom: 72px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: min(340px, calc(100vw - 32px));
+  width: min(320px, calc(100vw - 32px));
   background: #ffffff;
   border-radius: 14px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.14), 0 2px 8px rgba(0,0,0,0.08);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.13), 0 2px 8px rgba(0,0,0,0.07);
   overflow: hidden;
   z-index: 10;
+  pointer-events: auto;
 }
 
 #popup-card.hidden {
@@ -148,7 +155,7 @@ header h1 {
 }
 
 #popup-species {
-  font-size: 0.95rem;
+  font-size: 1rem;
   font-weight: 700;
   color: #111827;
   padding: 14px 16px 10px;
@@ -156,14 +163,14 @@ header h1 {
 }
 
 #popup-details {
-  padding: 8px 0;
+  padding: 6px 0;
 }
 
 .popup-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 7px 16px;
+  padding: 8px 16px;
   gap: 12px;
 }
 
@@ -172,15 +179,42 @@ header h1 {
 }
 
 .popup-label {
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   color: #6b7280;
   font-weight: 500;
   white-space: nowrap;
 }
 
 .popup-value {
-  font-size: 0.82rem;
+  font-size: 0.95rem;
   color: #111827;
-  font-weight: 500;
+  font-weight: 600;
   text-align: right;
+}
+
+/* ── Live location dot ───────────────────────────────────────────────── */
+.location-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #3b82f6;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(59,130,246,0.4);
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 2px rgba(59,130,246,0.4); }
+  50%  { box-shadow: 0 0 0 6px rgba(59,130,246,0.15); }
+  100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.4); }
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────── */
+@media (max-width: 767px) {
+  #popup-card {
+    bottom: 72px !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    top: auto !important;
+  }
 }

@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 DB_PATH = Path("/home/trees/data/trees.db")
 
-# Group mapping: substring (lowercase) -> group label
 SPECIES_GROUPS = {
     "ahorn":    "Ahorn",
     "linde":    "Linde",
@@ -73,8 +72,13 @@ def get_trees(
         "minlon": minlon, "maxlon": maxlon,
     }
 
-    if group:
-        # Map group label back to substring for SQL LIKE
+    if group == "Andere":
+        # Exclude all known groups
+        conditions = " AND ".join(
+            f"LOWER(species) NOT LIKE '%{key}%'" for key in SPECIES_GROUPS
+        )
+        query += f" AND ({conditions})"
+    elif group:
         key = next((k for k, v in SPECIES_GROUPS.items() if v == group), None)
         if key:
             query += " AND LOWER(species) LIKE :species_pattern"
