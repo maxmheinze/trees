@@ -164,10 +164,10 @@ function makeTreeSprite(color, dotR) {
   ctx.fill();
 
   return {
-    data:   new Uint8Array(ctx.getImageData(0, 0, w, h).data.buffer),
+    data:   new Uint8ClampedArray(ctx.getImageData(0, 0, w, h).data.buffer),
     width:  w,
     height: h,
-  };
+  }; 
 }
 
 function registerSprites() {
